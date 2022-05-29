@@ -1,0 +1,140 @@
+---
+title: "Dinosaur Era Classification using Decision Trees"
+author: "Grey Hutchinson"
+professor: "Professor Zellmer"
+date: "21 April 2022"
+output:
+  html_document: default
+  word_document: default
+---
+
+**Background**
+
+Studying fossils is a difficult task in biology. "Simple" observations may require years of research, paleontological dig sites, million-dollar excavators, and hundreds of hours of analysis to be identified and categorized. DNA is, as of now, unable to be sequenced due to its inability to be preserved for millions of years at a time. Further, it can be difficult to procure instruments needed to conduct deeper analysis, such as carbon dating tools to radiometrically measure the age of the rocks that the fossils are found in. Even so, studying prehistoric life is instructive in understanding the lineage of living species and the world from which they evolved. There is also strong social and educational value to expanding our knowledge of dinosaur species, as they are an engaging introductory subject to spark childhood excitement for the world of science. 
+
+Using the National History Museum's database of 310 dinosaurs, this script creates a machine learning classification tree using R's "Tree" library to identify the life period of a fossil--ranging from the Early Jurassic to the Late Cretaceous--using characteristics that can be determined observationally about the dinosaur, such as length, diet, and discovery location.
+
+Past classification and machine learning work has been exceedingly limited in the field of paleontology, though there have been instances successful forays into paleontological research tools. A relevant inclusion to this list is Millar *et al*'s 2019 paper, *Predicting Theropod Hunting Tactics Using Machine Learning*, where they evaluated the accuracy of many different classical machine learning techniques, such as K-nearest-neighbors (KNN), Support Vector Machines, and Naive Bayes models on a purely numerical dataset containing variables such as tooth length, weight, and species bite force. Their work showed strong success with multiple types of machine learning models, indicating that fossils are well within the reach of machine learning classifiers. 
+
+In classifying the period of life for fossils, I expect that a 50% classification accuracy in a 9-class system using a decision tree is possible. The null model would expect a (100/9) 11.1% accuracy rate by pure guesswork, so having a >50% accurate model would be a resounding success. My prior understanding is that certain characteristics--notably location and fossil length--will have strong correlations with the period that the dinosaur lived, which contributes to my confidence that this can be achieved. Similarly, I expect that location and fossil length will be the two most impactful nodes on the decision tree, and will commensurately be the first decisions made by the model.  
+
+
+
+**Methods**
+
+We begin by opening the dataset file (dino.txt, a tab-separated table) and making sure it looks usable using head():
+```{r}
+# dinos Identification Database
+dinos <- read.table(file = 'dino.txt', header = TRUE, sep = "\t",
+                        stringsAsFactors = TRUE)
+head(dinos)
+```
+
+
+Now we create our training and test sets. We're splitting the data up 70/30; this means that we are training the model on the first 70%, and then taking what it's learned and testing it on the final 30%, which it's never seen. We begin by setting a seed, which universalizes the random 70/30 split so that results are repeatable. These are then viewed, and can be referenced by opening the "train.set" and "test.set" data structures:
+```{r}
+set.seed(80) # This sets the random number generator so that we all end up with the same result.
+alpha     <- 0.7 # percentage of training set
+inTrain   <- sample(1:nrow(dinos), alpha * nrow(dinos)) # randomly sample the full dataset to select 70% of the data
+train.set <- dinos[inTrain,] # create training dataset with the random 70% chosen
+test.set  <- dinos[-inTrain,] # create test dataset with the remaining 30% of the data
+View(train.set)
+View(test.set)
+```
+
+
+Tree analysis makes piecewise decisions where it looks at each datapoint and finds a binary tipping point at which it is most likely to correlate with one type versus another, then repeats until it's classified the entire dataset. Here, we load the "Tree" package from R and create our initial classifier: a Tree that evaluates Period by comparing Diet, Location (lived_in), Type (Theropod, Sauropod, etc.), Length of the fossil, when it was discovered (named_in), and finally a boolean variable, Flight, which simply indicates whether the dinosaur in question was known to fly:   
+```{r}
+# Load the 'tree' package.
+library(tree)
+
+# Create a Classification Tree (CT) with the training data
+dinos.tree1 <- tree(period ~ diet + lived_in + type + length_m + named_in + flight,
+                    data = train.set)
+
+summary(dinos.tree1) #view the results
+```
+
+As indicated in the summary, our error rate is 31%. This means that 69% of the time, the classifier is correct in identifying the period in which the dinosaur lived. While there were 9 categories (Early/Mid/Late of the Jurassic/Triassic/Cretaceous), the summary shows that the decision tree ended with 20 terminal nodes. This indicates that the same categories could be reached by taking different decision tree "paths" to get there. Finally, we can see that the classifier only ended up using Location, Length, Type, Discovery Year, and Diet in its final tree. This indicates that Flight was simply not a strong indicator of period--perhaps a less shocking revelation with the knowledge that only 2 of the 310 dinosaurs evaluated could actually fly.
+
+Now we can plot the decision tree that we've created:
+
+```{r}
+plot(dinos.tree1) #view the tree
+text(dinos.tree1, all = T, cex=0.5) #add text to the tree
+```
+
+Now, we can predict the period of each fossil based on our decision tree, and summarize it in a table that shows how many instances from each period were correctly determined by the classifier. Since our dataset only contained 6 of the 9 possible periods, we adjust our null expectations to a (100/6) 16.6% correct classification rate:
+```{r}
+
+my.prediction <- predict(dinos.tree1, test.set) # gives the probability for each class
+maxidx <- function(arr) {
+  return(which(arr == max(arr)))
+}
+idx <- apply(my.prediction, c(1), maxidx)
+if(is.list(idx) == T){
+  idx <- do.call("rbind", idx)
+  idx <- idx[,1]
+}
+prediction <- c(1, 2, 3, 4, 5, 6)[idx]
+table(prediction, test.set$period)
+```
+
+
+#### Cross-Validation
+Using Cross-Validation to verify our results and to see at which inflection point we begin to overfit:
+```{r}
+set.seed(88)
+cv.results <- cv.tree(dinos.tree1)
+plot(cv.results)
+```
+Based on the cross-validation, we can see that our model begins to overfit after 10 parameters are used. This doesn't mean that it's getting less accurate for our current dataset; rather, this means that future predictions using this model would be less effective and generalizable.
+
+To account for this, we accept that we will lose some accuracy for the current model for the sake of future models by pruning away all but the 10 most effective parameters:
+```{r}
+dinos.tree2 <- prune.misclass(dinos.tree1, best = 10)
+
+summary(dinos.tree2) #view the new results
+```
+After pruning our classification tree, we can see that our error rate increased from 31% to 35%; meaning our accuracy on the current dataset dropped from 69% to 65%. The advantage of pruning our tree, though, is that the data is significantly less likely to be overfit if this model is applied to future data collected. While the 69% accuracy was better for this specific dataset, it may have been gaining that accuracy by seeking out non-scalable features.
+
+#### Plotting the Pruned Tree
+Now we can plot our simpler pruned tree!
+```{r}
+plot(dinos.tree2) #plot the new results as a tree
+text(dinos.tree2, all = T) #add text to the tree
+```
+
+As you can probably tell, however, this graph is not particularly useful for understanding our dataset due to the limitations of the plot() function, and the way data is labeled by R. For example, what does "type:abc" mean? The answer is that plot() converts categorical variables into simple letters, so type:abc refers to the first, second, and third categories of the "Type" variable: Armored Dinosaur, Ceratopsian, and Euornithopod. Since this is far from readable, I used Adobe Illustrator to make a much more understandable version of this flowchart so we can parse what it is telling us:
+
+![""](flow.png)
+**Results and Analysis**
+
+Our final model utilized 10 parameters from 4 variables--Location, Length of Fossil, Dinosaur Type, and Discovery Year--to create a decision tree with 13 terminal nodes accounting for 5 our of a possible 6 classifications. When used on the test set of dinosaur features, this tree successfully predicted the lived era of a given dinosaur 65% of the time, compared to a null (or "guess") accuracy of 16.6%.Considering our target accuracy was 50%, these results exceeded the expectations of the experiment. Our predicted most impactful variables were Location and Length--however, our tree shows that while Location was in fact the most contributory variable to predictions, the Discovery Year of the fossil was actually more predictive of the final classification (with contributions to 10/13 terminal nodes) than Length (with contributions to 7/13 terminal nodes), which came in third. Diet, while used in our unpruned tree, makes no appearance in our final, 10-parameter decision tree; Flight remained unused. 
+
+The significance of this project lies within the associations that can be gleaned by exploring the decision tree. By following terminal nodes back up through the tree, we can see some interesting associations and compare them with our priors; for example, sauropods, according to the Natural History Museum, were most diverse, abundant, and dominant during the Late Jurassic period. However, we can see that the classifier's only Late Jurassic terminal node is preceded by a node that specifically checks whether the dinosaur's type is "Sauropod"--if it is, the classifier deems it to be Late Cretaceous, not Late Jurassic. Another interesting classifier decision is that, on both sides of the tree, it chose "Early Jurassic" only when preceded by the decision that the dinosaur was less than (approx.) 8.5m in length. We can verify this pattern in reference to our dataset by indexing the dino.csv excel data by era, and then averaging the size of the dinosaurs found in each era to see, in essence, what the classifier is seeing: 
+
+![""](size.png)
+As this graph shows, Early Jurassic fossils are indeed smaller than their later counterparts, with the exception of Late Triassic, where the fossils were the smallest. The paleontological understanding for this pattern is that CO2 concentration was highest in the atmosphere during the Jurassic Era, which caused a massive uptick in plant life and therefore a sustainable amount of food for very large creatures to thrive. 
+
+While this classifier overperformed expectations, it has its shortcomings. Notable in the final tree diagram is the complete absence of Late Triassic identifications. As a human, I look at the above chart of Size by Era, for example, and assume that it could be very easily gleaned that the smallest dinosaurs are likely identifiable to be from the Triassic Era. However, it is perfectly possible that the classifier did not have adequate data to parse the difference between Triassic fossils and other classifications, which led it to simply always guess the era that was more represented in the dataset. While this may have produced the highest accuracy for the decision tree, it is disappointing to not be able to analyze which patterns led to a Triassic classification. In my opinion, that is the fundamental computational limitation of this project: there is tension between the model trying to accurately classify data and the human trying to learn from the data. How much more complex and accurate can the model get before it becomes completely unintelligible to a human? There certainly are no flow charts for neural network decision trees, yet one could easily argue that such an approach would create the best classifier. 
+
+The possible future directions of this approach are manifold. My immediate priority would be to double the size of this dataset; from even cursory research, I was able to find similar information on many more dinosaurs than are represented in the Natural History Museum's codified data. A larger dataset would certainly yield a more generalizable and accurate model, and would allow us to see more intricate relationships between variables. Another direction would be to try and legitimately maximize the accuracy of the model by turning it into a neural network. Besides being able to analyze the data more thoroughly, I believe there is a lot of meat left on the bone in the "taxonomy" variable that was not able to be parsed by a simple classifier. My ideal version of this machine would be able to find relationships between the taxonomies of the species alongside the other variables; it is fascinating to think how seeing a distant relation between two species may affect the classifier. Would a more complex model be able to create a version of its own timeline by seeing how deep a relationship is between species in a phylogenic sense? 
+
+Perhaps the largest shortcoming of this tool is that it is fundamentally limited by the fact that it is a decision tree classifier. The tradeoff between a decision tree classifier and a machine learning algorithm or neural network is that the decision tree produces results that can be investigated much easier by a human at the cost of accuracy. A neural network, for example, would have been able to make strong sense of a much larger dataset and come to a much more accurate conclusion based on features and relationships that we would not be able to parse. With a decision tree classifier, though, the process is laid bare and allows for very interesting insights to be gleaned and questions to be asked (for example, why, if Sauropods were most dominant during the Late Jurassic, did the classifier specifically avoid identifying Sauropods as Late Jurassic?). I believe that, in the scope of this project, the much more admirable goal was to create a tool that could be used to find questions to ask; while there could be academic applications to the technology, I think radiometric dating is best left to the paleontologists. Instead, it is most useful to create a framework to ask questions about the prehistoric world--and that is, in essence, what this project is: a computational approach to finding fun questions. 
+
+**Reference Links**
+
+Millar *et al*, *Predicting Theropod Hunting Tactics Using Machine Learning*: 
+https://osjournal.org/ojs/index.php/OSJ/article/view/1820
+
+Natural History Museum Dataset:
+https://www.kaggle.com/datasets/kjanjua/jurassic-park-the-exhaustive-dinosaur-dataset
+
+![""](meteor 1.png)
+![""](meteor 2.png)
+![""](meteor 3.png)
+![""](meteor 4.png)
+![""](meteor 5.png)
+![""](meteor 6.png)
+![""](meteor 7.png)
